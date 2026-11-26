@@ -9,13 +9,29 @@ st.set_page_config(page_title="Gala Marshalling", page_icon="🏁", layout="cent
 
 st.markdown("""
 <style>
-.mk-lane {width:100%; border-collapse:collapse; font-size:0.95rem; margin:0.25rem 0 0.5rem 0;}
-.mk-lane td {padding:3px 6px; border-bottom:1px solid rgba(128,128,128,0.25);}
-.mk-lane td.l {width:2rem; font-weight:700; text-align:center;}
-.mk-lane td.c {opacity:0.7; font-size:0.8rem;}
-.mk-lane tr.miss td {background:rgba(255,160,0,0.22);}
-.mk-title {font-weight:700; font-size:1.05rem;}
-.mk-sub {opacity:0.7; font-size:0.8rem;}
+.block-container {padding-top: 2.5rem; padding-bottom: 4rem;}
+.mk-chips {display:flex; gap:0.4rem; flex-wrap:wrap; margin:0.2rem 0 0.6rem 0;}
+.mk-chips span {background:rgba(128,128,128,0.18); border-radius:999px; padding:0.2rem 0.7rem; font-size:0.85rem;}
+.mk-chips b {font-size:1rem;}
+.mk-card {border-left:7px solid #6b7280; border-radius:10px; padding:0.35rem 0.6rem 0.4rem 0.7rem; margin-bottom:0.4rem; background:rgba(128,128,128,0.08);}
+.mk-card.ready {border-left-color:#22c55e;}
+.mk-card.next {border-left-color:#22c55e; background:rgba(34,197,94,0.12);}
+.mk-card.done {border-left-color:#3b82f6; opacity:0.85;}
+.mk-card.miss {border-left-color:#f59e0b; background:rgba(245,158,11,0.14);}
+.mk-top {display:flex; justify-content:space-between; align-items:center;}
+.mk-heat {font-size:1.35rem; font-weight:800;}
+.mk-tag {font-size:0.7rem; font-weight:800; letter-spacing:0.05em; padding:0.1rem 0.5rem; border-radius:999px; background:#22c55e; color:#04210f;}
+.mk-tag.warn {background:#f59e0b; color:#2b1a00;}
+.mk-ev {opacity:0.8; font-size:0.85rem; margin-bottom:0.15rem;}
+.mk-dots {font-size:0.8rem; margin:0.1rem 0 0.35rem 0; letter-spacing:0.12rem;}
+.mk-dots .on {color:#22c55e;} .mk-dots .off {opacity:0.4;} .mk-dots .you {color:#facc15; font-weight:800;}
+.mk-row {display:flex; align-items:center; gap:0.6rem; padding:0.28rem 0.2rem; border-top:1px solid rgba(128,128,128,0.22);}
+.mk-row.miss {background:rgba(245,158,11,0.25); border-radius:6px;}
+.mk-lane {flex:0 0 2rem; height:2rem; border-radius:50%; background:rgba(128,128,128,0.3); display:flex; align-items:center; justify-content:center; font-weight:800; font-size:1rem;}
+.mk-name {font-size:1.05rem; font-weight:600; line-height:1.15;}
+.mk-name small {display:block; font-weight:400; opacity:0.65; font-size:0.78rem;}
+.mk-gone {margin-left:auto; font-size:0.7rem; font-weight:800; color:#f59e0b;}
+div.stButton > button {min-height:3rem; font-size:1.05rem; font-weight:700;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -142,22 +158,35 @@ def show_new_room():
 # ---------------------------------------------------------------------------------------------
 # A ROOM: station view and overview
 # ---------------------------------------------------------------------------------------------
-def heat_card(pin, hk, swims, ticks, flags, station, mode):
-    """mode: 'ready' (tick button), 'way' (tick button, collapsed look) or 'done' (undo button)"""
+def dots_html(ticked, stations, station):
+    out = []
+    for n in range(1, stations + 1):
+        if n in ticked: out.append("<span class='on'>●</span>")
+        elif n == station: out.append("<span class='you'>◎</span>")
+        else: out.append("<span class='off'>○</span>")
+    return "".join(out)
+
+
+def heat_card(pin, hk, swims, ticks, flags, station, mode, stations, is_next=False):
+    """mode: 'ready' (tick button), 'way' (tick button) or 'done' (undo button)"""
     s, e, h = hk
     g = swims[(swims["session"] == s) & (swims["event_no"] == e) & (swims["heat"] == h)]
     if g.empty:
         return
+    missing = [flags[(s, e, h, int(r.lane))] for r in g.itertuples() if (s, e, h, int(r.lane)) in flags]
+    cls = "miss" if missing else ("done" if mode == "done" else ("next" if is_next else ("ready" if mode == "ready" else "")))
+    tag = "<span class='mk-tag warn'>MISSING</span>" if missing else ("<span class='mk-tag'>NEXT UP</span>" if is_next else "")
+    rows = ""
+    for r in g.itertuples():
+        gone = (s, e, h, int(r.lane)) in flags
+        rows += (f"<div class='mk-row{' miss' if gone else ''}'><div class='mk-lane'>{int(r.lane)}</div>"
+                 f"<div class='mk-name'>{escape(str(r.swimmer))}<small>{escape(str(r.club))}</small></div>"
+                 f"{'<div class=mk-gone>MISSING</div>' if gone else ''}</div>")
+    head = (f"<div class='mk-card {cls}'><div class='mk-top'><span class='mk-heat'>Heat {h}</span>{tag}</div>"
+            f"<div class='mk-ev'>{escape(mc.event_title(g['event'].iloc[0]))} · Session {s}</div>"
+            f"<div class='mk-dots'>{dots_html(ticks.get(hk, set()), stations, station)}</div>{rows}</div>")
     with st.container(border=True):
-        st.markdown(f"<div class='mk-title'>{escape(mc.event_title(g['event'].iloc[0]))} · Heat {h}</div><div class='mk-sub'>Session {s}</div>", unsafe_allow_html=True)
-        missing = [flags[(s, e, h, int(r.lane))] for r in g.itertuples() if (s, e, h, int(r.lane)) in flags]
-        if missing:
-            st.warning("Missing: " + ", ".join(missing))
-        rows = ""
-        for r in g.itertuples():
-            cls = " class='miss'" if (s, e, h, int(r.lane)) in flags else ""
-            rows += f"<tr{cls}><td class='l'>{int(r.lane)}</td><td>{escape(str(r.swimmer))}</td><td class='c'>{escape(str(r.club))}</td></tr>"
-        st.markdown(f"<table class='mk-lane'>{rows}</table>", unsafe_allow_html=True)
+        st.markdown(head, unsafe_allow_html=True)
         if mode == "done":
             st.button("↩ Undo", key=f"u_{s}_{e}_{h}_{station}", on_click=do_tick, args=(pin, hk, station, False), use_container_width=True)
         else:
@@ -175,28 +204,25 @@ def live_station(pin, station, stations, swims):
     ticks, flags = mc.load_ticks(db, pin), mc.load_flags(db, pin)
     keys = mc.heat_keys(swims)
     ready, way, done = mc.station_lists(keys, ticks, station, stations)
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Ready for you", len(ready))
-    c2.metric("On the way", len(way))
-    c3.metric("Done", len(done))
+    st.markdown(f"<div class='mk-chips'><span>Ready <b>{len(ready)}</b></span><span>On the way <b>{len(way)}</b></span><span>Done <b>{len(done)}</b></span></div>", unsafe_allow_html=True)
     st.button("🔄 Refresh", key="refresh_st", use_container_width=True)
     more = st.session_state.get("mk_more", 5)
     if not ready:
         st.info("Nothing waiting at your station right now." if keys else "No heats in this room.")
-    for hk in ready[:more]:
-        heat_card(pin, hk, swims, ticks, flags, station, "ready")
+    for i, hk in enumerate(ready[:more]):
+        heat_card(pin, hk, swims, ticks, flags, station, "ready", stations, is_next=(i == 0))
     if len(ready) > more:
         if st.button(f"Show {min(5, len(ready) - more)} more", key="mk_more_btn", use_container_width=True):
             st.session_state["mk_more"] = more + 5
     with st.expander("On the way to you"):
         st.caption("Heats that haven't been ticked at the station before yours. Tick one here if it arrived anyway.")
         for hk in way[:8]:
-            heat_card(pin, hk, swims, ticks, flags, station, "way")
+            heat_card(pin, hk, swims, ticks, flags, station, "way", stations)
         if len(way) > 8:
             st.caption(f"…and {len(way) - 8} more later in the gala.")
     with st.expander("Done at your station"):
         for hk in list(reversed(done))[:8]:
-            heat_card(pin, hk, swims, ticks, flags, station, "done")
+            heat_card(pin, hk, swims, ticks, flags, station, "done", stations)
 
 
 def live_overview(pin, stations, swims):
@@ -206,10 +232,7 @@ def live_overview(pin, stations, swims):
     rows = mc.overview_rows(swims, keys, ticks, flags, stations)
     finished = sum(1 for r in rows if r["_n"] >= stations)
     started = sum(1 for r in rows if 0 < r["_n"] < stations)
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Heats", len(rows))
-    c2.metric("In progress", started)
-    c3.metric("Finished", finished)
+    st.markdown(f"<div class='mk-chips'><span>Heats <b>{len(rows)}</b></span><span>In progress <b>{started}</b></span><span>Finished <b>{finished}</b></span></div>", unsafe_allow_html=True)
     st.button("🔄 Refresh", key="refresh_ov", use_container_width=True)
     show = st.radio("Show", ["In progress", "Not started", "Finished", "All"], horizontal=True, key="ov_filter")
     if show == "In progress":
@@ -252,7 +275,7 @@ def page_room(pin):
             st.rerun()
         return
     stations = int(room.get("stations") or 1)
-    st.title("🏁 " + (room.get("meet_name") or "Gala Marshalling"))
+    st.markdown("### 🏁 " + (room.get("meet_name") or "Gala Marshalling"))
     st.caption(f"Room {pin} · {stations} stations")
     swims = cached_swims(pin, db)
     opts = [f"Station {i}" for i in range(1, stations + 1)] + ["Overview (everyone)"]
