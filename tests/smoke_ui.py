@@ -25,7 +25,7 @@ def run(db, query, press=(), fragments=True, text=None):
     st.checkbox.return_value = False
     clicked = []
     def button(label, key=None, on_click=None, args=(), **k):
-        if key in press:
+        if key in press and not k.get('disabled'):
             clicked.append(key)
             if on_click: on_click(*args)
             return True
@@ -64,4 +64,11 @@ st, clicked = run(db, {"room": pin, "station": "2"}, press={"u_1_101_1_2"}); ass
 st, _ = run(db, {"room": pin, "station": "1"}, fragments=False); assert not st.error.call_args_list
 # unknown room
 st, _ = run(db, {"room": "00000"}); print("bad room errors:", [c.args[0] for c in st.error.call_args_list])
+# organiser tools: only on the Overview, and locked until the PIN is typed
+st, _ = run(db, {"room": pin, "station": "1"}); assert "Organiser tools (careful)" not in [c.args[0] for c in st.expander.call_args_list if c.args]
+st, _ = run(db, {"room": pin, "station": "overview"}); assert "Organiser tools (careful)" in [c.args[0] for c in st.expander.call_args_list if c.args]
+st, c = run(db, {"room": pin, "station": "overview"}, press={"del_btn"}); assert c == [] and mc.load_room(db, pin)   # locked: nothing happens
+st, c = run(db, {"room": pin, "station": "overview"}, press={"rst_btn"}, text={"org_pin": "99999"}); assert c == [] and mc.load_ticks(db, pin)
+st, c = run(db, {"room": pin, "station": "overview"}, press={"rst_btn"}, text={"org_pin": pin}); assert c == ["rst_btn"] and mc.load_ticks(db, pin) == {}
+st, c = run(db, {"room": pin, "station": "overview"}, press={"del_btn"}, text={"org_pin": pin}); assert mc.load_room(db, pin) is None
 print("ui smoke passed")
