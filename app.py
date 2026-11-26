@@ -262,18 +262,24 @@ def page_room(pin):
     st.query_params["station"] = "overview" if choice.startswith("Overview") else choice.split()[1]
     if choice.startswith("Overview"):
         live_overview(pin, stations, swims)
+        organiser_tools(pin, db)
     else:
         live_station(pin, int(choice.split()[1]), stations, swims)
-    with st.expander("Organiser tools"):
-        if st.checkbox("Clear every tick and flag (start of the gala)", key="rst_ok"):
-            if st.button("Clear ticks", key="rst_btn"):
-                mc.reset_ticks(db, pin)
-                st.success("Cleared.")
-        if st.checkbox("Delete this whole room", key="del_ok"):
-            if st.button("Delete room", key="del_btn"):
-                mc.delete_room(db, pin)
-                st.query_params.clear()
-                st.rerun()
+
+
+def organiser_tools(pin, db):
+    """Only on the Overview screen, and each action needs the room PIN typed in, so a marshal at a station can't hit it by accident."""
+    with st.expander("Organiser tools (careful)"):
+        st.caption("To clear the ticks or delete the room, type the room PIN first.")
+        typed = st.text_input("Type the room PIN to unlock", key="org_pin", max_chars=5)
+        unlocked = typed.strip() == str(pin)
+        if st.button("Clear every tick and flag", key="rst_btn", disabled=not unlocked):
+            mc.reset_ticks(db, pin)
+            st.success("Cleared.")
+        if st.button("Delete this whole room", key="del_btn", disabled=not unlocked):
+            mc.delete_room(db, pin)
+            st.query_params.clear()
+            st.rerun()
 
 
 pin_q = str(st.query_params.get("room", "")).strip()
