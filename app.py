@@ -10,6 +10,8 @@ st.set_page_config(page_title="Gala Marshalling", page_icon="🏁", layout="cent
 st.markdown("""
 <style>
 .block-container {padding-top: 2.5rem; padding-bottom: 4rem;}
+.mk-h1 {font-size:1.2rem; font-weight:800; line-height:1.2; margin:0.2rem 0 0;}
+.mk-room {opacity:0.65; font-size:0.8rem; margin-bottom:0.4rem;}
 .mk-chips {display:flex; gap:0.4rem; flex-wrap:wrap; margin:0.2rem 0 0.6rem 0;}
 .mk-chips span {background:rgba(128,128,128,0.18); border-radius:999px; padding:0.2rem 0.7rem; font-size:0.85rem;}
 .mk-chips b {font-size:1rem;}
@@ -185,7 +187,7 @@ def heat_card(pin, hk, swims, ticks, flags, station, mode, stations, is_next=Fal
     head = (f"<div class='mk-card {cls}'><div class='mk-top'><span class='mk-heat'>Heat {h}</span>{tag}</div>"
             f"<div class='mk-ev'>{escape(mc.event_title(g['event'].iloc[0]))} · Session {s}</div>"
             f"<div class='mk-dots'>{dots_html(ticks.get(hk, set()), stations, station)}</div>{rows}</div>")
-    with st.container(border=True):
+    with st.container():
         st.markdown(head, unsafe_allow_html=True)
         if mode == "done":
             st.button("↩ Undo", key=f"u_{s}_{e}_{h}_{station}", on_click=do_tick, args=(pin, hk, station, False), use_container_width=True)
@@ -205,7 +207,6 @@ def live_station(pin, station, stations, swims):
     keys = mc.heat_keys(swims)
     ready, way, done = mc.station_lists(keys, ticks, station, stations)
     st.markdown(f"<div class='mk-chips'><span>Ready <b>{len(ready)}</b></span><span>On the way <b>{len(way)}</b></span><span>Done <b>{len(done)}</b></span></div>", unsafe_allow_html=True)
-    st.button("🔄 Refresh", key="refresh_st", use_container_width=True)
     more = st.session_state.get("mk_more", 5)
     if not ready:
         st.info("Nothing waiting at your station right now." if keys else "No heats in this room.")
@@ -223,6 +224,7 @@ def live_station(pin, station, stations, swims):
     with st.expander("Done at your station"):
         for hk in list(reversed(done))[:8]:
             heat_card(pin, hk, swims, ticks, flags, station, "done", stations)
+    st.button("🔄 Refresh now", key="refresh_st", use_container_width=True)
 
 
 def live_overview(pin, stations, swims):
@@ -275,13 +277,12 @@ def page_room(pin):
             st.rerun()
         return
     stations = int(room.get("stations") or 1)
-    st.markdown("### 🏁 " + (room.get("meet_name") or "Gala Marshalling"))
-    st.caption(f"Room {pin} · {stations} stations")
+    st.markdown(f"<div class='mk-h1'>🏁 {escape(room.get('meet_name') or 'Gala Marshalling')}</div><div class='mk-room'>Room {pin} · {stations} stations</div>", unsafe_allow_html=True)
     swims = cached_swims(pin, db)
     opts = [f"Station {i}" for i in range(1, stations + 1)] + ["Overview (everyone)"]
     qp = str(st.query_params.get("station", ""))
     idx = opts.index(f"Station {qp}") if qp.isdigit() and f"Station {qp}" in opts else (len(opts) - 1 if qp == "overview" else 0)
-    choice = st.selectbox("Your station", opts, index=idx, key="mk_station")
+    choice = st.selectbox("Your station", opts, index=idx, key="mk_station", label_visibility="collapsed")
     st.query_params["station"] = "overview" if choice.startswith("Overview") else choice.split()[1]
     if choice.startswith("Overview"):
         live_overview(pin, stations, swims)
