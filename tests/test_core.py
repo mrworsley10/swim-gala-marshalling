@@ -62,3 +62,21 @@ if len(sys.argv) > 1:
     print("PDF:", mc.summary(d)); print(d.club.value_counts().to_dict())
     pin4 = mc.create_room(db, d, "PDF", 6); assert len(mc.load_swims(db, pin4)) == len(d)
     print("PDF round trip ok")
+
+# --- stations on paper are skipped ---
+db = FakeDB(); pin = mc.create_room(db, df, "Paper Gala", 4)
+keys = mc.heat_keys(mc.load_swims(db, pin))
+mc.set_paper(db, pin, 2, True); mc.set_paper(db, pin, 3, True)
+assert mc.load_paper(db, pin) == {2, 3} and mc.load_ticks(db, pin) == {}      # markers are not ticks
+paper = mc.load_paper(db, pin)
+mc.set_tick(db, pin, keys[0], 1, True)
+r, w, d = mc.station_lists(keys, mc.load_ticks(db, pin), 4, 4, paper); assert r == [keys[0]] and len(w) == 2   # S4 follows S1
+r, w, d = mc.station_lists(keys, mc.load_ticks(db, pin), 1, 4, paper); assert len(r) == 2 and d == [keys[0]]
+mc.set_tick(db, pin, keys[0], 4, True)
+rows = mc.overview_rows(mc.load_swims(db, pin), keys, mc.load_ticks(db, pin), {}, 4, paper)
+assert rows[0]["S2"] == "📄" and rows[0]["S4"] == "✅" and rows[0]["_n"] == 2 and rows[1]["_n"] == 0
+mc.reset_ticks(db, pin); assert mc.load_ticks(db, pin) == {} and mc.load_paper(db, pin) == {2, 3}   # a clear keeps paper choices
+mc.set_paper(db, pin, 2, False); assert mc.load_paper(db, pin) == {3}
+# no paper stations: behaves as before
+r, w, d = mc.station_lists(keys, {}, 2, 4); assert (len(r), len(w)) == (0, 3)
+print("paper stations ok")

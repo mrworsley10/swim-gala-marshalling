@@ -32,7 +32,8 @@ st.markdown("""
 .mk-lane {flex:0 0 2rem; height:2rem; border-radius:50%; background:rgba(128,128,128,0.3); display:flex; align-items:center; justify-content:center; font-weight:800; font-size:1rem;}
 .mk-name {font-size:1.05rem; font-weight:600; line-height:1.15;}
 .mk-name small {display:block; font-weight:400; opacity:0.65; font-size:0.78rem;}
-.mk-gone {margin-left:auto; font-size:0.7rem; font-weight:800; color:#f59e0b;}
+.mk-time {margin-left:auto; font-size:0.9rem; font-weight:600; opacity:0.8; font-variant-numeric:tabular-nums;}
+.mk-gone {margin-left:0.6rem; font-size:0.7rem; font-weight:800; color:#f59e0b;}
 div.stButton > button {min-height:3rem; font-size:1.05rem; font-weight:700;}
 </style>
 """, unsafe_allow_html=True)
@@ -160,16 +161,22 @@ def show_new_room():
 # ---------------------------------------------------------------------------------------------
 # A ROOM: station view and overview
 # ---------------------------------------------------------------------------------------------
-def dots_html(ticked, stations, station):
+def dots_html(ticked, stations, station, paper=frozenset()):
     out = []
     for n in range(1, stations + 1):
-        if n in ticked: out.append("<span class='on'>●</span>")
+        if n in paper: out.append("<span class='off'>▫</span>")
+        elif n in ticked: out.append("<span class='on'>●</span>")
         elif n == station: out.append("<span class='you'>◎</span>")
         else: out.append("<span class='off'>○</span>")
     return "".join(out)
 
 
-def heat_card(pin, hk, swims, ticks, flags, station, mode, stations, is_next=False):
+def _entry_txt(v):
+    v = str(v or "").strip()
+    return "" if v.upper() in ("", "N/A", "NT", "NONE", "NAN") else v
+
+
+def heat_card(pin, hk, swims, ticks, flags, station, mode, stations, is_next=False, paper=frozenset()):
     """mode: 'ready' (tick button), 'way' (tick button) or 'done' (undo button)"""
     s, e, h = hk
     g = swims[(swims["session"] == s) & (swims["event_no"] == e) & (swims["heat"] == h)]
@@ -183,10 +190,11 @@ def heat_card(pin, hk, swims, ticks, flags, station, mode, stations, is_next=Fal
         gone = (s, e, h, int(r.lane)) in flags
         rows += (f"<div class='mk-row{' miss' if gone else ''}'><div class='mk-lane'>{int(r.lane)}</div>"
                  f"<div class='mk-name'>{escape(str(r.swimmer))}<small>{escape(str(r.club))}</small></div>"
+                 f"<div class='mk-time'>{escape(_entry_txt(r.entry))}</div>"
                  f"{'<div class=mk-gone>MISSING</div>' if gone else ''}</div>")
     head = (f"<div class='mk-card {cls}'><div class='mk-top'><span class='mk-heat'>Heat {h}</span>{tag}</div>"
             f"<div class='mk-ev'>{escape(mc.event_title(g['event'].iloc[0]))} · Session {s}</div>"
-            f"<div class='mk-dots'>{dots_html(ticks.get(hk, set()), stations, station)}</div>{rows}</div>")
+            f"<div class='mk-dots'>{dots_html(ticks.get(hk, set()), stations, station, paper)}</div>{rows}</div>")
     with st.container():
         st.markdown(head, unsafe_allow_html=True)
         if mode == "done":
@@ -203,46 +211,49 @@ def heat_card(pin, hk, swims, ticks, flags, station, mode, stations, is_next=Fal
 
 def live_station(pin, station, stations, swims):
     db = get_db()
-    ticks, flags = mc.load_ticks(db, pin), mc.load_flags(db, pin)
+    ticks, flags, paper = mc.load_ticks(db, pin), mc.load_flags(db, pin), mc.load_paper(db, pin)
     keys = mc.heat_keys(swims)
-    ready, way, done = mc.station_lists(keys, ticks, station, stations)
+    if station in paper:
+        st.info("📄 This station is marked as using paper, so the app skips it. Tick heats here only if you want to use the app after all (the organiser can switch paper off on the Overview screen).")
+    ready, way, done = mc.station_lists(keys, ticks, station, stations, paper)
     st.markdown(f"<div class='mk-chips'><span>Ready <b>{len(ready)}</b></span><span>On the way <b>{len(way)}</b></span><span>Done <b>{len(done)}</b></span></div>", unsafe_allow_html=True)
     more = st.session_state.get("mk_more", 5)
     if not ready:
         st.info("Nothing waiting at your station right now." if keys else "No heats in this room.")
     for i, hk in enumerate(ready[:more]):
-        heat_card(pin, hk, swims, ticks, flags, station, "ready", stations, is_next=(i == 0))
+        heat_card(pin, hk, swims, ticks, flags, station, "ready", stations, is_next=(i == 0), paper=paper)
     if len(ready) > more:
         if st.button(f"Show {min(5, len(ready) - more)} more", key="mk_more_btn", use_container_width=True):
             st.session_state["mk_more"] = more + 5
     with st.expander("On the way to you"):
         st.caption("Heats that haven't been ticked at the station before yours. Tick one here if it arrived anyway.")
         for hk in way[:8]:
-            heat_card(pin, hk, swims, ticks, flags, station, "way", stations)
+            heat_card(pin, hk, swims, ticks, flags, station, "way", stations, paper=paper)
         if len(way) > 8:
             st.caption(f"…and {len(way) - 8} more later in the gala.")
     with st.expander("Done at your station"):
         for hk in list(reversed(done))[:8]:
-            heat_card(pin, hk, swims, ticks, flags, station, "done", stations)
+            heat_card(pin, hk, swims, ticks, flags, station, "done", stations, paper=paper)
     st.button("🔄 Refresh now", key="refresh_st", use_container_width=True)
 
 
 def live_overview(pin, stations, swims):
     db = get_db()
-    ticks, flags = mc.load_ticks(db, pin), mc.load_flags(db, pin)
+    ticks, flags, paper = mc.load_ticks(db, pin), mc.load_flags(db, pin), mc.load_paper(db, pin)
     keys = mc.heat_keys(swims)
-    rows = mc.overview_rows(swims, keys, ticks, flags, stations)
-    finished = sum(1 for r in rows if r["_n"] >= stations)
-    started = sum(1 for r in rows if 0 < r["_n"] < stations)
+    rows = mc.overview_rows(swims, keys, ticks, flags, stations, paper)
+    need = max(1, stations - len(paper))   # stations that use the app
+    finished = sum(1 for r in rows if r["_n"] >= need)
+    started = sum(1 for r in rows if 0 < r["_n"] < need)
     st.markdown(f"<div class='mk-chips'><span>Heats <b>{len(rows)}</b></span><span>In progress <b>{started}</b></span><span>Finished <b>{finished}</b></span></div>", unsafe_allow_html=True)
     st.button("🔄 Refresh", key="refresh_ov", use_container_width=True)
     show = st.radio("Show", ["In progress", "Not started", "Finished", "All"], horizontal=True, key="ov_filter")
     if show == "In progress":
-        rows = [r for r in rows if 0 < r["_n"] < stations]
+        rows = [r for r in rows if 0 < r["_n"] < need]
     elif show == "Not started":
         rows = [r for r in rows if r["_n"] == 0]
     elif show == "Finished":
-        rows = [r for r in rows if r["_n"] >= stations]
+        rows = [r for r in rows if r["_n"] >= need]
     if flags:
         st.warning(f"{len(flags)} swimmer(s) flagged missing: " + ", ".join(sorted(set(flags.values()))[:12]))
     if rows:
@@ -297,6 +308,15 @@ def organiser_tools(pin, db):
         st.caption("To clear the ticks or delete the room, type the room PIN first.")
         typed = st.text_input("Type the room PIN to unlock", key="org_pin", max_chars=5)
         unlocked = typed.strip() == str(pin)
+        room = mc.load_room(db, pin) or {}
+        n_st = int(room.get("stations") or 1)
+        paper = mc.load_paper(db, pin)
+        st.markdown("**Stations using paper** (the app skips these)")
+        for n in range(1, n_st + 1):
+            want = st.checkbox(f"Station {n} is on paper", value=(n in paper), key=f"paper_{n}_{'1' if n in paper else '0'}", disabled=not unlocked)
+            if unlocked and want != (n in paper):
+                mc.set_paper(db, pin, n, want)
+                st.rerun()
         if st.button("Clear every tick and flag", key="rst_btn", disabled=not unlocked):
             mc.reset_ticks(db, pin)
             st.success("Cleared.")

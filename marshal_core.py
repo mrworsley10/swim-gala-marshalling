@@ -327,8 +327,28 @@ def load_ticks(db, pin):
     rows = _fetch_all(lambda: db.table("marshal_ticks").select("session,event_no,heat,station").eq("room_pin", str(pin)).order("id"))
     out = {}
     for r in rows:
+        if int(r["session"]) == PAPER_MARK:   # a "this station is on paper" marker, not a real tick
+            continue
         out.setdefault((int(r["session"]), int(r["event_no"]), int(r["heat"])), set()).add(int(r["station"]))
     return out
+
+
+# A station on paper is stored as a marker row in marshal_ticks (session 0, event 0, heat 0), so no database change is needed.
+PAPER_MARK = 0
+
+
+def load_paper(db, pin):
+    """Set of station numbers marked as 'using paper'."""
+    rows = _fetch_all(lambda: db.table("marshal_ticks").select("session,station").eq("room_pin", str(pin)).eq("session", PAPER_MARK).order("id"))
+    return {int(r["station"]) for r in rows}
+
+
+def set_paper(db, pin, station, on):
+    if on:
+        db.table("marshal_ticks").upsert({"room_pin": str(pin), "session": PAPER_MARK, "event_no": 0, "heat": 0, "station": int(station)},
+                                         on_conflict="room_pin,session,event_no,heat,station").execute()
+    else:
+        db.table("marshal_ticks").delete().eq("room_pin", str(pin)).eq("session", PAPER_MARK).eq("station", int(station)).execute()
 
 
 def load_flags(db, pin):
@@ -356,7 +376,10 @@ def set_flag(db, pin, heat_key, lane, swimmer, on):
 
 
 def reset_ticks(db, pin):
+    paper = load_paper(db, pin)
     db.table("marshal_ticks").delete().eq("room_pin", str(pin)).execute()
+    for n in paper:   # which stations are on paper is a set-up choice, so it survives a clear
+        set_paper(db, pin, n, True)
     db.table("marshal_flags").delete().eq("room_pin", str(pin)).execute()
 
 
@@ -376,23 +399,25 @@ def heat_keys(swims):
     return [(int(r.session), int(r.event_no), int(r.heat)) for r in g.itertuples()]
 
 
-def station_lists(keys, ticks, station, stations):
+def station_lists(keys, ticks, station, stations, paper=frozenset()):
     """For one station: (ready, on_the_way, done), each a list of heat keys in running order.
-    ready = ticked at the station before (station 1: any heat not yet done) and not yet ticked here.
+    Stations on paper are skipped: ready = ticked at the nearest app station before this one (none before it: any heat not yet done here).
     on_the_way = not ticked here and not ready yet. done = ticked here."""
+    before = [n for n in range(1, station) if n not in paper]
+    prev = before[-1] if before else None
     ready, way, done = [], [], []
     for k in keys:
         t = ticks.get(k, set())
         if station in t:
             done.append(k)
-        elif station == 1 or (station - 1) in t:
+        elif prev is None or prev in t:
             ready.append(k)
         else:
             way.append(k)
     return ready, way, done
 
 
-def overview_rows(swims, keys, ticks, flags, stations):
+def overview_rows(swims, keys, ticks, flags, stations, paper=frozenset()):
     ev = swims.drop_duplicates("event_no").set_index("event_no")["event"].to_dict() if not swims.empty else {}
     rows = []
     for (s, e, h) in keys:
@@ -400,8 +425,8 @@ def overview_rows(swims, keys, ticks, flags, stations):
         miss = sum(1 for (fs, fe, fh, _l) in flags if (fs, fe, fh) == (s, e, h))
         row = {"Session": s, "Event": event_title(ev.get(e, f"Event {e}")), "Heat": h}
         for n in range(1, stations + 1):
-            row[f"S{n}"] = "✅" if n in t else ""
+            row[f"S{n}"] = "📄" if n in paper else ("✅" if n in t else "")
         row["Missing"] = miss if miss else ""
-        row["_n"] = len(t)
+        row["_n"] = len([n for n in t if n not in paper])
         rows.append(row)
     return rows
