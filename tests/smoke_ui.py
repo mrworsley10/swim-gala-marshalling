@@ -72,3 +72,12 @@ st, c = run(db, {"room": pin, "station": "overview"}, press={"rst_btn"}, text={"
 st, c = run(db, {"room": pin, "station": "overview"}, press={"rst_btn"}, text={"org_pin": pin}); assert c == ["rst_btn"] and mc.load_ticks(db, pin) == {}
 st, c = run(db, {"room": pin, "station": "overview"}, press={"del_btn"}, text={"org_pin": pin}); assert mc.load_room(db, pin) is None
 print("ui smoke passed")
+
+# --- instant taps: the tap shows at once from this phone's own copy, and still reaches the database ---
+db = FakeDB(); pin = mc.create_room(db, df, "Instant Gala", 3)
+st, c = run(db, {"room": pin, "station": "1"}, press={"t_1_101_1_1"})
+assert st.session_state["mk_ot"] == {((1, 101, 1), 1): True}, st.session_state.get("mk_ot")
+for f in st.session_state["mk_futs"]: f.result(timeout=5)
+assert mc.load_ticks(db, pin) == {(1, 101, 1): {1}}
+assert not st.session_state["mk_failed"]
+print("instant taps ok")

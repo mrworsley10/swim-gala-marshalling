@@ -1,3 +1,5 @@
+import time
+from concurrent.futures import ThreadPoolExecutor
 import streamlit as st
 import pandas as pd
 from html import escape
@@ -56,18 +58,72 @@ def _toast(msg):
         pass
 
 
+# ---------------------------------------------------------------------------------------------
+# INSTANT TAPS: a tap changes this phone's screen straight away and the save goes to the database in the background,
+# one at a time and in order. The database is re-read every ~10 seconds (or on Refresh), which is how other marshals' ticks arrive.
+# ---------------------------------------------------------------------------------------------
+READ_EVERY = 9   # seconds between database reads (the page's own timer fires every 10)
+
+
+def _bg(fn, *args):
+    ss = st.session_state
+    if ss.get("mk_pool") is None:
+        ss["mk_pool"], ss["mk_futs"], ss["mk_failed"] = ThreadPoolExecutor(max_workers=1, thread_name_prefix="mk"), [], []
+    failed = ss["mk_failed"]
+
+    def run():
+        try:
+            fn(*args)
+        except Exception as e:   # reported on the next redraw (a background thread can't show messages itself)
+            failed.append(str(e))
+    ss["mk_futs"][:] = [f for f in ss["mk_futs"] if not f.done()]
+    ss["mk_futs"].append(ss["mk_pool"].submit(run))
+
+
+def _flush():
+    for f in list(st.session_state.get("mk_futs") or []):
+        try:
+            f.result(timeout=20)
+        except Exception:
+            pass
+
+
+def force_reread():
+    st.session_state["mk_force"] = True
+
+
+def read_state(pin, db):
+    """(ticks, flags, paper): the last database read, plus this phone's own taps on top."""
+    ss = st.session_state
+    now = time.time()
+    if ss.get("mk_pin") != pin or ss.pop("mk_force", False) or now - ss.get("mk_read_at", 0) >= READ_EVERY:
+        _flush()   # our own taps are saved first, so the read below includes them
+        ss["mk_base"] = (mc.load_ticks(db, pin), mc.load_flags(db, pin), mc.load_paper(db, pin))
+        ss["mk_ot"], ss["mk_of"], ss["mk_pin"], ss["mk_read_at"] = {}, {}, pin, now
+    base_t, base_f, paper = ss["mk_base"]
+    ticks = {k: set(v) for k, v in base_t.items()}
+    for (hk, station), on in ss.get("mk_ot", {}).items():
+        (ticks.setdefault(hk, set()).add if on else ticks.setdefault(hk, set()).discard)(station)
+    flags = dict(base_f)
+    for key, name in ss.get("mk_of", {}).items():
+        if name is None: flags.pop(key, None)
+        else: flags[key] = name
+    failed = ss.get("mk_failed")
+    while failed:
+        _toast(f"Couldn't save a tap ({failed.pop(0)}). Check your signal, then press Refresh.")
+    return ticks, flags, paper
+
+
 def do_tick(pin, hk, station, on):
-    try:
-        mc.set_tick(get_db(), pin, hk, station, on)
-    except Exception as e:
-        _toast(f"Couldn't save that tick: {e}")
+    st.session_state.setdefault("mk_ot", {})[(hk, station)] = bool(on)
+    _bg(mc.set_tick, get_db(), pin, hk, station, on)
 
 
 def do_flag(pin, hk, lane, swimmer, key):
-    try:
-        mc.set_flag(get_db(), pin, hk, lane, swimmer, bool(st.session_state.get(key)))
-    except Exception as e:
-        _toast(f"Couldn't save that flag: {e}")
+    on = bool(st.session_state.get(key))
+    s, e, h = hk
+    st.session_state.setdefault("mk_of", {})[(s, e, h, int(lane))] = swimmer if on else None
+    _bg(mc.set_flag, get_db(), pin, hk, lane, swimmer, on)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -211,7 +267,7 @@ def heat_card(pin, hk, swims, ticks, flags, station, mode, stations, is_next=Fal
 
 def live_station(pin, station, stations, swims):
     db = get_db()
-    ticks, flags, paper = mc.load_ticks(db, pin), mc.load_flags(db, pin), mc.load_paper(db, pin)
+    ticks, flags, paper = read_state(pin, db)
     keys = mc.heat_keys(swims)
     if station in paper:
         st.info("📄 This station is marked as using paper, so the app skips it. Tick heats here only if you want to use the app after all (the organiser can switch paper off on the Overview screen).")
@@ -234,19 +290,19 @@ def live_station(pin, station, stations, swims):
     with st.expander("Done at your station"):
         for hk in list(reversed(done))[:8]:
             heat_card(pin, hk, swims, ticks, flags, station, "done", stations, paper=paper)
-    st.button("🔄 Refresh now", key="refresh_st", use_container_width=True)
+    st.button("🔄 Refresh now", key="refresh_st", on_click=force_reread, use_container_width=True)
 
 
 def live_overview(pin, stations, swims):
     db = get_db()
-    ticks, flags, paper = mc.load_ticks(db, pin), mc.load_flags(db, pin), mc.load_paper(db, pin)
+    ticks, flags, paper = read_state(pin, db)
     keys = mc.heat_keys(swims)
     rows = mc.overview_rows(swims, keys, ticks, flags, stations, paper)
     need = max(1, stations - len(paper))   # stations that use the app
     finished = sum(1 for r in rows if r["_n"] >= need)
     started = sum(1 for r in rows if 0 < r["_n"] < need)
     st.markdown(f"<div class='mk-chips'><span>Heats <b>{len(rows)}</b></span><span>In progress <b>{started}</b></span><span>Finished <b>{finished}</b></span></div>", unsafe_allow_html=True)
-    st.button("🔄 Refresh", key="refresh_ov", use_container_width=True)
+    st.button("🔄 Refresh", key="refresh_ov", on_click=force_reread, use_container_width=True)
     show = st.radio("Show", ["In progress", "Not started", "Finished", "All"], horizontal=True, key="ov_filter")
     if show == "In progress":
         rows = [r for r in rows if 0 < r["_n"] < need]
@@ -316,9 +372,12 @@ def organiser_tools(pin, db):
             want = st.checkbox(f"Station {n} is on paper", value=(n in paper), key=f"paper_{n}_{'1' if n in paper else '0'}", disabled=not unlocked)
             if unlocked and want != (n in paper):
                 mc.set_paper(db, pin, n, want)
+                force_reread()
                 st.rerun()
         if st.button("Clear every tick and flag", key="rst_btn", disabled=not unlocked):
+            _flush()
             mc.reset_ticks(db, pin)
+            force_reread()
             st.success("Cleared.")
         if st.button("Delete this whole room", key="del_btn", disabled=not unlocked):
             mc.delete_room(db, pin)
